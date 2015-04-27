@@ -2,10 +2,11 @@
   :description "Utility functions for interacting with the bigquery API."
   :version "0.0.1"
   :license "MIT"
-  :defsystem-depends-on (:cl21)
-  :class :cl21-system
   :depends-on
   (:cl-json
+   :cl-ppcre
+   :cl-interpol
+   :inferior-shell
    :cjf-stdlib
    :drakma)
   :components
