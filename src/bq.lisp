@@ -2,7 +2,9 @@
 
 (defpackage :bq
   (:use
+   :cl
    :cl-json
+   :cl-ppcre
    :cjf-stdlib
    :cl-interpol)
   (:export
@@ -14,10 +16,12 @@
    :run-in-order
    :start-load-job
    :table-exists-p
+   :bq-ls-tables
    :bq-error
    :*project*
    :*output-dataset*
    :*account*
+   :*table-cache*
    :*gcloud-path*))
 
 (in-package :bq)
@@ -33,6 +37,10 @@
 ;; account (i.e. e-mail) by whom requests are being made
 ;; Used to activate the refresh token as needed.
 (defparameter *account* "")
+
+;; If the table cache is non-nil, then table-exists-p will check here to see if
+;; the table exists.
+(defparameter *table-cache* nil)
 
 ;; Path to the google cloud sdk bin dir.
 (defparameter *gcloud-path*
@@ -55,14 +63,16 @@
   (inferior-shell:run
    #?"${*gcloud-path*}/gcloud auth activate-refresh-token ${acct} ${(refresh-token)}"))
 
+(defun bq-ls-tables (dataset)
+  (inferior-shell:run
+   #?"${*gcloud-path*}/bq ls -n 1000 ${dataset}" :output :string))
+
 (defun table-exists-p (dataset table)
   "Does the specified table exist in the specified dataset?"
   ;; TODO: use the API rather than this silly run a shell command approach.
-  (and (cl-ppcre:scan
-        #?/\s+${table}\s*$/
-        (inferior-shell:run
-         #?"${*gcloud-path*}/bq ls -n 1000 ${dataset}" :output :string)
-        :multi-line-mode :start)
+  (and (scan (create-scanner #?/(^|\s)${table}(\s|$)/
+                             :multi-line-mode t)
+                (or *table-cache* (bq-ls-tables dataset)))
        t))
 
 (defmacro defquery (name &key (dataset *output-dataset*) table query)
@@ -175,7 +185,7 @@
                      (mget q-obj :table))))
     (println "Running query: ")
     (println q)
-    (println #?"--> ${*output-dataset*}.${dest}\n\n\n")
+    (println #?"--> ${(mget q-obj :dataset)}.${(mget q-obj :table)}\n\n\n")
     (insert-job-sync json-body)
     (princ "\n\n\n")))
 
@@ -222,6 +232,6 @@
   (insert-job-sync (load-job-config gs-fn dest-dataset dest-table)))
 
 (defun run-in-order (qlist)
-    (map #'run-query-sync qlist))
+    (mapc #'run-query-sync qlist))
 
 
