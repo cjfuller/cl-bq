@@ -28,23 +28,23 @@
 
 (enable-interpol-syntax)
 
-;; google cloud project id against which queries are made
-(defparameter *project* "")
+(defparameter *project*
+  "Google cloud project id against which queries are made")
 
-;; default dataset in which to store queries
-(defparameter *output-dataset* "")
+(defparameter *output-dataset* ""
+  "Default dataset in which to store query result tables")
 
-;; account (i.e. e-mail) by whom requests are being made
-;; Used to activate the refresh token as needed.
-(defparameter *account* "")
+(defparameter *account* ""
+  "Google account (i.e. e-mail) by whom request are being made.  Used to
+  activate refresh tokens as needed.")
 
-;; If the table cache is non-nil, then table-exists-p will check here to see if
-;; the table exists.
-(defparameter *table-cache* nil)
+(defparameter *table-cache* nil
+  "Cache for existing tables in a dataset.  If non-nil, then tables existence
+  checks (table-exists-p) will look here.")
 
-;; Path to the google cloud sdk bin dir.
 (defparameter *gcloud-path*
-  #?"${(namestring (user-homedir-pathname))}/google-cloud-sdk/bin/")
+  #?"${(namestring (user-homedir-pathname))}/google-cloud-sdk/bin/"
+  "Path to the google cloud sdk bin directory.")
 
 (define-condition bq-error (error)
   ((msg :initarg :msg :reader msg)))
@@ -64,6 +64,7 @@
    #?"${*gcloud-path*}/gcloud auth activate-refresh-token ${acct} ${(refresh-token)}"))
 
 (defun bq-ls-tables (dataset)
+  ;; TODO: use the HTTP API rather than the command line tool.
   (inferior-shell:run
    #?"${*gcloud-path*}/bq ls -n 1000 ${dataset}" :output :string))
 
