@@ -8,7 +8,8 @@
    :cl-interpol
    :inferior-shell
    :cjf-stdlib
-   :drakma)
+   :drakma
+   :cl-ascii-table)
   :components
   ((:module "src"
     :components

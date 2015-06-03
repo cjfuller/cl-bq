@@ -6,7 +6,8 @@
    :cl-json
    :cl-ppcre
    :cjf-stdlib
-   :cl-interpol)
+   :cl-interpol
+   :ascii-table)
   (:export
    :defquery
    :get-job-status
@@ -22,7 +23,10 @@
    :*output-dataset*
    :*account*
    :*table-cache*
-   :*gcloud-path*))
+   :*gcloud-path*
+   :read-table-data
+   :preview-table-data
+   :select))
 
 (in-package :bq)
 
@@ -47,7 +51,9 @@
   "Path to the google cloud sdk bin directory.")
 
 (define-condition bq-error (error)
-  ((msg :initarg :msg :reader msg)))
+  ((msg :initarg :msg :reader msg))
+  (:report (lambda (condition stream)
+             (format stream "BigQuery error: ~a" (msg condition)))))
 
 (defun credentials ()
   (decode-json-from-source
@@ -89,9 +95,9 @@
   ;; TODO: this feels like a gratuitous macro.  Think more about the query
   ;; interface.
   `(defun ,name ()
-     (:dataset ,dataset
-      :table ,table
-      :query ,query)))
+     `(:dataset ,,dataset
+       :table ,,table
+       :query ,,query)))
 
 (defun jobs-url ()
   #?"https://www.googleapis.com/bigquery/v2/projects/${*project*}/jobs")
@@ -188,7 +194,7 @@
     (println q)
     (println #?"--> ${(mget q-obj :dataset)}.${(mget q-obj :table)}\n\n\n")
     (insert-job-sync json-body)
-    (princ "\n\n\n")))
+    (terpri) (terpri) (terpri)))
 
 (defun backoff-time (init-time)
   (let ((new-time (* 2 init-time)))
@@ -232,7 +238,70 @@
 (defun start-load-job (gs-fn dest-dataset dest-table)
   (insert-job-sync (load-job-config gs-fn dest-dataset dest-table)))
 
+(defun read-table-column-names (table &key (dataset *output-dataset*))
+  (let ((tabledata-url
+          (concatenate
+           'string
+           "https://www.googleapis.com/bigquery/v2"
+           #?"/projects/${*project*}/datasets/${dataset}/tables/${table}")))
+    (mapcar (lambda (f) (mget f :name))
+            (mget* (decode-json
+                    (drakma:http-request tabledata-url
+                                         :method :get
+                                         :want-stream t
+                                         :additional-headers (auth-headers)))
+                   :schema
+                   :fields))))
+
+(defun fetch-table-data (table dataset n)
+  (let ((tabledata-url
+          (concatenate
+           'string
+           "https://www.googleapis.com/bigquery/v2"
+           #?"/projects/${*project*}/datasets/${dataset}/tables/${table}/data"
+           (if n
+               #?"?maxResults=${n}"
+               ""))))
+    (decode-json
+     (drakma:http-request tabledata-url
+                          :method :get
+                          :want-stream t
+                          :additional-headers (auth-headers)))))
+
+(defun read-table-data (table &key (dataset *output-dataset*) (n nil))
+  (let* ((rows (mget (fetch-table-data table dataset n) :rows))
+         (values (mapcar (lambda (r)
+                           (mapcar (lambda (col)
+                                     (let ((colvals (mapcar #'cdr col)))
+                                       (if (cdr colvals)
+                                           colvals
+                                           (car colvals))))
+                                   (mget r :f)))
+                         rows)))
+    `((:headers . ,(read-table-column-names table :dataset dataset))
+      (:rows . ,values))))
+
+(defun select (table-data &key (only nil) (except nil))
+  ; unfortunately, the set operations don't guarantee post-operation ordering,
+  ; so using loop...
+  `((:headers . ,(loop for h in (mget table-data :headers)
+                       when (member h only :test #'equal)
+                         unless (member h except :test #'equal)
+                           collect h))
+    (:rows . ,(mapcar (lambda (r) (loop for h in (mget table-data :headers)
+                                        for col in r
+                                        when (member h only :test #'equal)
+                                          unless (member h except :test #'equal)
+                                            collect col))
+                      (mget table-data :rows)))))
+
+
+(defun preview-table-data (table &key (dataset *output-dataset*) (n 5) (preprocess #'identity))
+  (let* ((data (funcall preprocess (read-table-data table :dataset dataset :n n)))
+         (tbl (make-table (mget data :headers))))
+    (mapc (lambda (r) (add-row tbl r)) (mget data :rows))
+    (display tbl)))
+
+
 (defun run-in-order (qlist)
     (mapc #'run-query-sync qlist))
-
-
