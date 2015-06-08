@@ -26,6 +26,7 @@
    :*gcloud-path*
    :read-table-data
    :preview-table-data
+   :store-query-in-repo
    :select))
 
 (in-package :bq)
@@ -82,7 +83,8 @@
                 (or *table-cache* (bq-ls-tables dataset)))
        t))
 
-(defmacro defquery (name &key (dataset *output-dataset*) table query)
+(defmacro defquery (name &key (dataset *output-dataset*) table query
+                              (description "") (tags nil) (title nil))
   "Define a query (function) that can be run via run-query-sync.
 
    required kwargs:
@@ -97,7 +99,11 @@
   `(defun ,name ()
      `(:dataset ,,dataset
        :table ,,table
-       :query ,,query)))
+       :query ,,query
+       :description ,,description
+       :tags ,(mapcar (lambda (tag) (concatenate 'string "#" tag)) ,tags)
+       :title ,(or ,title (symbol-name ',name))
+       )))
 
 (defun jobs-url ()
   #?"https://www.googleapis.com/bigquery/v2/projects/${*project*}/jobs")
@@ -175,11 +181,51 @@
   "Insert a job via insert-job-async and wait for completion."
   (wait-job (insert-job-async config) 1))
 
-(defun run-query-sync (qfun)
+(defun write-query-to-file (query query-file)
+  (let* ((table (concatenate 'string
+                             (mget query :dataset)
+                             "."
+                             (mget query :table)))
+         (tagstring (format nil "~{~A~^ ~}" (mget query :tags)))
+
+         (qcontents #?"
+-- Title: ${(mget query :title)}
+-- Description: ${(mget query :description)}
+-- Tags: ${tagstring}
+-- Result stored in: ${table}
+
+${(mget query :query)}
+"))
+    (with-open-file (f query-file :direction :output :if-exists :supersede)
+      (format f "~a" qcontents))))
+
+(defun commit-and-push (repo tempdir query-file)
+  #!"cd ${tempdir} && git add ${query-file} && git commit -n -m \"Saved query ${query-file} from cl-bq.\" && git push")
+
+(defun delete-temp-clone (tempdir)
+  (uiop:delete-directory-tree (make-pathname :directory `(:absolute ,tempdir)) :validate t))
+
+(defun store-query-in-repo (&key repo path query)
+  (let* ((tempdir (concatenate 'string
+                              (namestring uiop:*temporary-directory*)
+                              "temp-clone"))
+         (query-file (concatenate 'string
+                                  tempdir
+                                  "/"
+                                  path)))
+    #!"git clone ${repo} ${tempdir}"
+    (write-query-to-file query query-file)
+    (commit-and-push repo tempdir path)
+    (delete-temp-clone tempdir)))
+
+
+(defun run-query-sync (qfun &key push-to-repo path)
   "Run a query synchronously.
 
    Args:
        qfun: a query function as defined by defquery.
+       push-to-repo: a git repository to push the query to
+       path: the path in the repository in which to put the query
 "
   (let* ((q-obj (funcall qfun))
          (q (regex-replace-all
@@ -194,6 +240,11 @@
     (println q)
     (println #?"--> ${(mget q-obj :dataset)}.${(mget q-obj :table)}\n\n\n")
     (insert-job-sync json-body)
+    (when push-to-repo
+        (store-query-in-repo :repo push-to-repo
+                             :path path
+                             :query q-obj))
+
     (terpri) (terpri) (terpri)))
 
 (defun backoff-time (init-time)
@@ -305,3 +356,4 @@
 
 (defun run-in-order (qlist)
     (mapc #'run-query-sync qlist))
+
