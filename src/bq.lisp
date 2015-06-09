@@ -83,6 +83,11 @@
                 (or *table-cache* (bq-ls-tables dataset)))
        t))
 
+(defun process-description (desc &key (comment-string "--"))
+  (cl-ppcre:regex-replace-all #?/\n/ desc (concatenate 'string
+                                                       (string #\newline)
+                                                       comment-string " ")))
+
 (defmacro defquery (name &key (dataset *output-dataset*) table query
                               (description "") (tags nil) (title nil))
   "Define a query (function) that can be run via run-query-sync.
@@ -190,7 +195,7 @@
 
          (qcontents #?"
 -- Title: ${(mget query :title)}
--- Description: ${(mget query :description)}
+-- Description: ${(process-description (mget query :description))}
 -- Tags: ${tagstring}
 -- Result stored in: ${table}
 
