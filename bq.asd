@@ -4,9 +4,9 @@
   :license "MIT"
   :depends-on
   (:cl-json
+   :cl-annot
    :cl-ppcre
    :cl-interpol
-   :inferior-shell
    :cjf-stdlib
    :drakma
    :cl-ascii-table)
