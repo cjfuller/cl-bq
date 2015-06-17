@@ -146,6 +146,19 @@
            :source-uris (list gs-fn)
            :write-disposition "WRITE_TRUNCATE"}}})
 
+(defun extract-csv-config (gcs-fn dataset table)
+  #M{:configuration
+     #M{
+        :extract
+        #M{
+           :destination-uris (list gcs-fn)
+           :source-table
+           #M{
+              :project-id *project*
+              :dataset-id dataset
+              :table-id table}}}})
+
+
 @export
 (defun insert-job (config)
   (-> (post "/jobs" config)
@@ -162,6 +175,21 @@
   (insert-job (load-job-config gs-fn dataset table)))
 
 @export
+(defun insert-json-load-job (gs-fn dataset table schema-fields)
+  (insert-job (mset*
+               (load-job-config gs-fn
+                                dataset
+                                table
+                                :format "NEWLINE_DELIMITED_JSON")
+               '(:configuration :load :schema)
+               #M{:fields schema-fields})))
+
+@export
+(defun insert-export-to-csv-job (gcs-fn dataset table)
+  "Export the specified table to a CSV in GCS."
+  (insert-job (extract-csv-config gcs-fn dataset table)))
+
+@export
 (defun read-table-column-names (dataset table)
   (-> (http-get #?"/datasets/${dataset}/tables/${table}")
     (mget* :schema :fields)
@@ -169,15 +197,13 @@
 
 @export
 (defun fetch-table-data (dataset table &key (n 5))
+  ;; TODO: handle repeated values correctly
   (-> (http-get #?"/datasets/${dataset}/tables/${table}/data?maxResults=${n}")
     (mget :rows)
     (rmapcar (lambda (r) (mget r :f)))
     (rmapcar (lambda (col)
-               (:= ext-col (mapcar (lambda (val) (mget val :v))
-                                   col)
-                 (if (cdr ext-col)
-                     ext-col
-                     (car ext-col)))))))
+               (mapcar (lambda (val) (mget val :v))
+                       col)))))
 
 
 (in-package :bq)
@@ -280,7 +306,7 @@ ${(mget query :query)}
     (delete-temp-clone tempdir)))
 
 @export
-(defun run-query-sync (qfun &key push-to-repo path)
+(defun run-query-sync (qfun &key push-to-repo path export-to)
   "Run a query synchronously.
 
    Args:
@@ -302,6 +328,9 @@ ${(mget query :query)}
         (store-query-in-repo :repo push-to-repo
                              :path path
                              :query q-obj))
+    (when export-to
+      (println (format nil #?"Exporting to ${export-to}. Job id: ~A"
+       (insert-export-to-csv-job export-to (mget q-obj :dataset) (mget q-obj :table)))))
 
     (terpri) (terpri) (terpri)))
 
@@ -320,6 +349,7 @@ ${(mget query :query)}
                                             collect col))
                       (mget table-data :rows)))))
 
+@export
 (defun read-table-data (table &key dataset n)
   (let ((headers (read-table-column-names dataset table))
         (data (fetch-table-data dataset table :n n)))
