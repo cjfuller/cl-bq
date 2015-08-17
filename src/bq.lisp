@@ -5,34 +5,55 @@
    :cl
    :cl-annot
    :cl-json
-   :cjf-stdlib
-   :cl-interpol))
+   :col
+   :cl-interpol)
+  (:export
+   :*project*
+   :*account*
+   :*gcloud-path*
+   :http-get
+   :post
+   :ls-tables
+   :table-exists-p
+   :job-status
+   :insert-job
+   :insert-query-job
+   :insert-backup-load-job
+   :insert-json-load-job
+   :insert-export-to-csv-job
+   :read-table-column-names
+   :fetch-table-data))
 
 (defpackage :bq
   (:use
    :cl
    :cl-annot
    :cl-ppcre
-   :cjf-stdlib
+   :col
    :cl-interpol
    :ascii-table
-   :bq-api-client))
+   :bq-api-client)
+  (:export
+   :*default-dataset*
+   :defquery
+   :wait-on-job-completion
+   :run-query-sync
+   :select
+   :read-table-data
+   :preview-table-data
+   :run-in-order))
 
 (in-package :bq-api-client)
 
-(enable-annot-syntax)
-(enable-interpol-syntax)
+(enable-reader-exts)
 
-@export
 (defparameter *project*
   "Google cloud project id against which queries are made")
 
-@export
 (defparameter *account* ""
   "Google account (i.e. e-mail) by whom request are being made.  Used to
   activate refresh tokens as needed.")
 
-@export
 (defparameter *gcloud-path*
   #?"${(namestring (user-homedir-pathname))}/google-cloud-sdk/bin/"
   "Path to the google cloud sdk bin directory.")
@@ -63,7 +84,6 @@
 (defun refresh ()
   #!"${*gcloud-path*}/gcloud auth activate-refresh-token ${*account*} ${(refresh-token)}")
 
-@export
 (defun http-get (relative &optional (retry-with-refresh t))
   (let* ((url (api-url relative))
          ; Don't print all the headers with the bearer token to stdout.
@@ -80,7 +100,6 @@
                (http-get relative nil))
         response)))
 
-@export
 (defun post (relative body &optional (retry-with-refresh t))
   (let* ((url (api-url relative))
          ; Don't print all the headers with the bearer token to stdout.
@@ -100,18 +119,15 @@
                (post relative body nil))
         response)))
 
-@export
 (defun ls-tables (dataset &key (n 20))
   (-> (http-get #?"/datasets/${dataset}/tables?maxResults=${n}")
     (mget :tables)
     (rmapcar (lambda (tbl) (mget* tbl :table-reference :table-id)))))
 
-@export
 (defun table-exists-p (dataset table)
   "Does the specified table exist in the specified dataset?"
   (member table (ls-tables dataset) :test #'equal))
 
-@export
 (defun job-status (job-id)
   (-> (http-get #?"/jobs/${job-id}")
     (tee
@@ -132,7 +148,7 @@
            :query query
            :write-disposition "WRITE_TRUNCATE"}}})
 
-(defun load-job-config (gs-fn dataset table &key (format "DATASTORE_BACKUP"))
+(defun load-job-config (gs-fn dataset table &key (format "DATASTORE_BACKUP") (max-bad 0))
   #M{:configuration
      #M{
         :load
@@ -143,6 +159,7 @@
               :dataset-id dataset
               :table-id table}
            :source-format format
+           :max-bad-records max-bad
            :source-uris (list gs-fn)
            :write-disposition "WRITE_TRUNCATE"}}})
 
@@ -159,22 +176,18 @@
               :table-id table}}}})
 
 
-@export
 (defun insert-job (config)
   (-> (post "/jobs" config)
     (mget* :job-reference :job-id)))
 
-@export
 (defun insert-query-job (query dataset table)
   "Insert a query job, return the job id."
   (insert-job (query-job-config query dataset table)))
 
-@export
-(defun insert-backup-load-job (gs-fn dataset table)
+(defun insert-backup-load-job (gs-fn dataset table &key (max-bad 0))
   "Insert a backup load job, return the job id."
-  (insert-job (load-job-config gs-fn dataset table)))
+  (insert-job (load-job-config gs-fn dataset table :max-bad max-bad)))
 
-@export
 (defun insert-json-load-job (gs-fn dataset table schema-fields)
   (insert-job (mset*
                (load-job-config gs-fn
@@ -184,18 +197,15 @@
                '(:configuration :load :schema)
                #M{:fields schema-fields})))
 
-@export
 (defun insert-export-to-csv-job (gcs-fn dataset table)
   "Export the specified table to a CSV in GCS."
   (insert-job (extract-csv-config gcs-fn dataset table)))
 
-@export
 (defun read-table-column-names (dataset table)
   (-> (http-get #?"/datasets/${dataset}/tables/${table}")
     (mget* :schema :fields)
     (rmapcar (lambda (f) (mget f :name)))))
 
-@export
 (defun fetch-table-data (dataset table &key (n 5))
   ;; TODO: handle repeated values correctly
   (-> (http-get #?"/datasets/${dataset}/tables/${table}/data?maxResults=${n}")
@@ -206,12 +216,12 @@
                        col)))))
 
 
+(pop-reader-exts)
+
 (in-package :bq)
 
-(enable-interpol-syntax)
-(enable-annot-syntax)
+(enable-reader-exts)
 
-@export
 (defparameter *default-dataset* "")
 
 (define-condition bq-error (error)
@@ -223,7 +233,6 @@
 (defun process-description (desc &key (comment-string "--"))
   (cl-ppcre:regex-replace-all #?/\n/ desc (<> (string #\newline) comment-string " ")))
 
-@export
 (defmacro defquery (name &key (dataset *default-dataset*) table query
                               (description "") (tags nil) (title nil))
   "Define a query (function) that can be run via run-query-sync.
@@ -246,7 +255,6 @@
        :title ,(or ,title (symbol-name ',name))
        )))
 
-@export
 (defun wait-on-job-completion (job-id &optional (poll-interval 1))
     "Wait for the specified job to complete.
 
@@ -305,7 +313,6 @@ ${(mget query :query)}
     (commit-and-push repo tempdir path)
     (delete-temp-clone tempdir)))
 
-@export
 (defun run-query-sync (qfun &key push-to-repo path export-to)
   "Run a query synchronously.
 
@@ -334,7 +341,6 @@ ${(mget query :query)}
 
     (terpri) (terpri) (terpri)))
 
-@export
 (defun select (table-data &key (only nil) (except nil))
   ; unfortunately, the set operations don't guarantee post-operation ordering,
   ; so using loop...
@@ -349,21 +355,19 @@ ${(mget query :query)}
                                             collect col))
                       (mget table-data :rows)))))
 
-@export
 (defun read-table-data (table &key dataset n)
   (let ((headers (read-table-column-names dataset table))
         (data (fetch-table-data dataset table :n n)))
     (list :headers headers
           :rows data)))
 
-@export
 (defun preview-table-data (table &key (dataset *default-dataset*) (n 5) (preprocess #'identity))
   (let* ((data (funcall preprocess (read-table-data table :dataset dataset :n n)))
          (tbl (make-table (mget data :headers))))
     (mapc (lambda (r) (add-row tbl r)) (mget data :rows))
     (display tbl)))
 
-@export
 (defun run-in-order (qlist)
     (mapc #'run-query-sync qlist))
 
+(pop-reader-exts)

@@ -7,7 +7,7 @@
    :cl-annot
    :cl-ppcre
    :cl-interpol
-   :cjf-stdlib
+   :col
    :drakma
    :cl-ascii-table)
   :components
