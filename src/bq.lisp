@@ -140,6 +140,7 @@
         :query
         #M{
            :allow-large-results t
+           :flatten-results nil
            :destination-table
            #M{
               :project-id *project*
