@@ -296,6 +296,7 @@ ${(mget query :query)}
       (format f "~a" qcontents))))
 
 (defun commit-and-push (repo tempdir query-file)
+  (declare (ignore repo))
   #!"cd ${tempdir} && git add ${query-file} && git commit -n -m \"Saved query ${query-file} from cl-bq.\" && git push")
 
 (defun delete-temp-clone (tempdir)
@@ -327,8 +328,8 @@ ${(mget query :query)}
              #?/\s+/
              (regex-replace-all #?/\s*--.*\n/ (mget q-obj :query) "")
              " ")))
-    (println "Running query: ")
-    (println q)
+    (println "Running query:")
+    (println (mget q-obj :query))
     (println #?"--> ${(mget q-obj :dataset)}.${(mget q-obj :table)}\n\n\n")
     (wait-on-job-completion
          (insert-query-job q (mget q-obj :dataset) (mget q-obj :table)))
