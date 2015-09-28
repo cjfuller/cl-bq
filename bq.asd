@@ -9,7 +9,8 @@
    :cl-interpol
    :col
    :drakma
-   :cl-ascii-table)
+   :cl-ascii-table
+   :split-sequence)
   :components
   ((:module "src"
     :components

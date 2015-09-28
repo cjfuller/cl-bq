@@ -32,10 +32,12 @@
    :col
    :cl-interpol
    :ascii-table
-   :bq-api-client)
+   :bq-api-client
+   :split-sequence)
   (:export
-   :*default-dataset*
+   :*default-repo*
    :defquery
+   :doquery
    :wait-on-job-completion
    :run-query-sync
    :select
@@ -68,10 +70,14 @@
   #M(:type :alist){
     :|Authorization| #?"Bearer ${(token)}"})
 
+(defun filter-on-account (creds)
+  (funcall (curry #'remove-if-not (lambda (item) (equal (mget* item :key :account) *account*))) creds))
+
 (defun credentials ()
   (-> (pathname #?"${(namestring (user-homedir-pathname))}/.config/gcloud/credentials")
     decode-json-from-source
     (mget :data)
+    filter-on-account
     car
     (mget :credential)))
 
@@ -223,7 +229,7 @@
 
 (enable-reader-exts)
 
-(defparameter *default-dataset* "")
+(defparameter *default-repo* "")
 
 (define-condition bq-error (error)
   ((msg :initarg :msg :reader msg))
@@ -234,27 +240,38 @@
 (defun process-description (desc &key (comment-string "--"))
   (cl-ppcre:regex-replace-all #?/\n/ desc (<> (string #\newline) comment-string " ")))
 
-(defmacro defquery (name &key (dataset *default-dataset*) table query
-                              (description "") (tags nil) (title nil))
+(defun dataset-name (ds-and-table)
+  (car (split-sequence #\. ds-and-table)))
+
+(defun table-name (ds-and-table)
+  (cadr (split-sequence #\. ds-and-table)))
+
+(defmacro defquery (name &key table query (description "") (tags nil) (title nil))
   "Define a query (function) that can be run via run-query-sync.
 
    required kwargs:
-       table: the table into which the output will be written
+       table: the dataset.table into which the output will be written
        query: a string containing the query to run
-   optional kwarg:
-       dataset: the dataset in which the output table will be created.  Defaults
-       to *default-dataset*.
 "
   ;; TODO: this feels like a gratuitous macro.  Think more about the query
   ;; interface.
   `(defun ,name ()
-     `(:dataset ,,dataset
-       :table ,,table
+     `(:dataset ,(dataset-name ,table)
+       :table ,(table-name ,table)
        :query ,,query
        :description ,(process-description ,description)
        :tags ,(mapcar (lambda (tag) (<> "#" tag)) ,tags)
        :title ,(or ,title (symbol-name ',name))
        )))
+
+(defmacro doquery (name &key table query (description "") (tags nil) (title nil)
+                          (push-to-repo nil) (repo nil) path)
+  "Define a query and run it synchronously."
+  `(progn
+     (defquery ,name :table ,table :query ,query :description ,description
+       :tags ,tags :title ,title)
+     (run-query-sync #',name :push-to-repo ,(and push-to-repo (or repo *default-repo*))
+       :path ,path)))
 
 (defun wait-on-job-completion (job-id &optional (poll-interval 1))
     "Wait for the specified job to complete.
@@ -271,6 +288,8 @@ Poll with exponential backoff.
          (err (cadr job-result)))
     (when err
       (error 'bq-error :msg (format nil "~A" err)))
+    (when (not job-id)
+      (error 'bq-error :msg "Job-id was unexpectedly null."))
     (println #?"Waiting for job ${job-id}. Status is: ${status}.")
     (unless (equal status "DONE")
       (sleep poll-interval)
@@ -310,6 +329,8 @@ ${(mget query :query)}
                                   tempdir
                                   "/"
                                   path)))
+    (when (probe-file tempdir)
+      (delete-temp-clone tempdir))
     #!"git clone ${repo} ${tempdir}"
     (write-query-to-file query query-file)
     (commit-and-push repo tempdir path)
@@ -324,10 +345,11 @@ ${(mget query :query)}
        path: the path in the repository in which to put the query
 "
   (let* ((q-obj (funcall qfun))
-         (q (regex-replace-all
-             #?/\s+/
-             (regex-replace-all #?/\s*--.*\n/ (mget q-obj :query) "")
-             " ")))
+         ;(q (regex-replace-all
+         ;    #?/\s+/
+         ;    (regex-replace-all #?/\s*--.*\n/ (mget q-obj :query) "")
+                                        ;    " ")))
+         (q (mget q-obj :query)))
     (println "Running query:")
     (println (mget q-obj :query))
     (println #?"--> ${(mget q-obj :dataset)}.${(mget q-obj :table)}\n\n\n")
@@ -341,7 +363,7 @@ ${(mget query :query)}
       (println (format nil #?"Exporting to ${export-to}. Job id: ~A"
        (insert-export-to-csv-job export-to (mget q-obj :dataset) (mget q-obj :table)))))
 
-    (terpri) (terpri) (terpri)))
+    (terpri) (terpri)))
 
 (defun select (table-data &key (only nil) (except nil))
   ; unfortunately, the set operations don't guarantee post-operation ordering,
